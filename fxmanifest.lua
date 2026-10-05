@@ -4,7 +4,7 @@ rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aw
 lua54 'yes'
 
 description 'rsg-smelting'
-version '3.0.2'
+version '3.0.3'
 
 ox_lib 'locale'
 

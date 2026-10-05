@@ -45,6 +45,14 @@ Config.Recipes = {
             { item = 'resource_gold_ore', amount = 50 }
         }
     },
+    { output = 'resource_gold_bar',
+        label = 'recipe_gold_bar',
+        time = 30000,
+        inputs = {
+            { item = 'resource_coal',        amount = 10 },
+            { item = 'resource_gold_nugget', amount = 100 }
+        }
+    },
     { output = 'resource_silver_bar',
         label = 'recipe_silver_bar',
         time = 30000,
