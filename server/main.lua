@@ -75,14 +75,16 @@ end
 ---------------------------------------------------------------------
 -- Persistence (survives restarts and crashes): owed items + live jobs
 ---------------------------------------------------------------------
-local KVP_KEY = 'rsg-smelting:state'
+-- Stored in MySQL (oxmysql) instead of resource KVP, so no server "db" folder is created
+local stateLoaded = false
 
 local function saveState()
+    if not stateLoaded then return end -- don't overwrite saved state before it has been loaded
     local live = {}
     for _, job in pairs(pending) do
         live[#live + 1] = { citizenid = job.citizenid, recipeIndex = job.recipeIndex, amount = job.amount, info = job.info }
     end
-    SetResourceKvp(KVP_KEY, json.encode({ owed = owed, live = live }))
+    MySQL.prepare('INSERT INTO rsg_smelting_state (id, data) VALUES (1, ?) ON DUPLICATE KEY UPDATE data = VALUES(data)', { json.encode({ owed = owed, live = live }) })
 end
 
 local function addOwed(citizenid, item, amount)
@@ -98,8 +100,9 @@ local function oweJobInputs(citizenid, job)
 end
 
 -- Load at start: any job still "live" was interrupted by a crash/kill -> owe its inputs
-do
-    local raw = GetResourceKvpString(KVP_KEY)
+MySQL.ready(function()
+    MySQL.query.await('CREATE TABLE IF NOT EXISTS rsg_smelting_state (id TINYINT UNSIGNED NOT NULL PRIMARY KEY, data LONGTEXT NOT NULL)')
+    local raw = MySQL.scalar.await('SELECT data FROM rsg_smelting_state WHERE id = 1')
     local ok, data = pcall(json.decode, raw or '')
     if ok and type(data) == 'table' then
         for cid, items in pairs(data.owed or {}) do
@@ -113,8 +116,9 @@ do
             end
         end
     end
+    stateLoaded = true
     saveState()
-end
+end)
 
 -- Give back a job's inputs; anything that won't fit is kept as owed for the character
 local function giveOrOwe(src, citizenid, item, total, reason)

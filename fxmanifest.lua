@@ -4,7 +4,7 @@ rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aw
 lua54 'yes'
 
 description 'rsg-smelting'
-version '3.0.1'
+version '3.0.2'
 
 ox_lib 'locale'
 
@@ -18,6 +18,7 @@ client_scripts {
 }
 
 server_scripts {
+    '@oxmysql/lib/MySQL.lua',
     'server/sv_config.lua',
     'server/webhook.lua',
     'server/main.lua',
@@ -35,6 +36,7 @@ files {
 
 dependencies {
     'rsg-core',
+    'oxmysql',
     'rsg-inventory',
     'ox_lib',
     'ox_target',
