@@ -65,15 +65,11 @@ Included: `en`, `de`, `el`, `es`, `fr`, `ja`, `nl`, `pl`, `pt-br`, `ro`. Set the
 - Disconnect refunds are held in memory, so they are lost if the resource restarts before the player logs back in.
 
 ## Changelog
-### 3.3.0
+### 3.0.0
 - All remaining hardcoded text moved to locales, including config labels and Discord webhook embeds
 - Added de, el, es, fr, ja, nl, pl, pt-br and ro translations
-
-### 3.2.0
 - Added Discord webhook system (`server/sv_config.lua`, `server/webhook.lua`)
 - Owed disconnect refunds lost on resource stop are now logged for manual compensation
-
-### 3.1.0
 - Fixed NUI focus getting stuck when the smelt request was rejected client-side
 - Ore removal now rolls back if any item fails to remove (no partial loss)
 - Players who disconnect mid-smelt are refunded on next login; resource stop refunds online players
