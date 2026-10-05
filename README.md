@@ -7,7 +7,7 @@ Turn ores into metal bars at smelter NPCs or ore-bucket props. Built for **RSG-C
 - Optional world-prop smelters via ox_target (`p_bucketore03x`, `p_horseprops03x` by default)
 - NUI recipe list with live ore counts, batch quantity picker and progress bar (Backspace cancels)
 - All validation server-side: recipe, batch size, distance, item counts, elapsed time
-- Ores are taken when smelting starts and refunded on cancel, failure, full inventory, resource stop, or disconnect (refunded on next login)
+- Ores are taken when smelting starts and refunded on cancel, failure, full output inventory, resource stop, or disconnect. Refunds that don't fit, and refunds owed after a disconnect, logout or server crash, are saved (resource KVP) and paid when the character next logs in or opens a smelter
 - ox_lib notifications and locales (`locales/en.json`)
 - Discord webhook logging with separate channels, per-event toggles, rate-limit queue and security pings
 
@@ -61,8 +61,9 @@ Included: `en`, `de`, `el`, `es`, `fr`, `ja`, `nl`, `pl`, `pt-br`, `ro`. Set the
 `label` values in `shared/config.lua` (smelters, blip, prop smelter, recipes) are locale keys; if a key doesn't exist the text is shown as-is, so plain text still works. When adding a smelter or recipe, add its key to every locale file.
 
 ## Notes
-- Prop smelters can't be verified server-side (map props aren't networked); the server only checks the player is standing near the reported prop position. Set `Config.SmeltProps.enabled = false` if you only want fixed NPC smelters.
-- Disconnect refunds are held in memory, so they are lost if the resource restarts before the player logs back in.
+- Prop smelters can't be verified server-side (map props aren't networked). Fill `Config.SmeltProps.locations` with the prop coordinates you allow, otherwise the server only checks the player is standing near the reported prop position. Set `Config.SmeltProps.enabled = false` if you only want fixed NPC smelters.
+- A smelt belongs to the character that started it; switching character mid-smelt holds the refund for the original character.
+- A smelt the client never finishes (game crash) is refunded automatically when the player next starts one.
 
 ## Changelog
 ### 3.3.0

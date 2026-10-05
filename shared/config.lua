@@ -20,6 +20,13 @@ Config.SmeltProps = {
     enabled = true,
     label   = 'prop_smelter',
     models  = { 'p_bucketore03x', 'p_horseprops03x' },
+    -- Recommended: list the coords of the props you allow. When this list has entries,
+    -- the server only accepts a prop smelt at one of them (stops smelting anywhere).
+    -- Leave empty to accept any prop the player stands next to (not verifiable server-side).
+    locations = {
+        -- vector3(0.0, 0.0, 0.0),
+    },
+    locationTolerance = 2.0, -- metres between the reported prop and a listed location
 }
 Config.MaxUseDistance = 5.0    -- server-side anti-exploit distance check
 Config.MaxBatch       = 20     -- max bars per smelt

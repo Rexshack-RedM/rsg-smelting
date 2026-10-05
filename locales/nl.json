@@ -85,5 +85,6 @@
     "wh_player_val": "%s (ID %s)",
     "wh_seconds": "%ss",
     "wh_elapsed_val": "%ss / %ss",
-    "wh_unknown": "Onbekend"
+    "wh_unknown": "Onbekend",
+    "smelt_refund_deferred": "Your bag was full: the rest will be returned when you next open a smelter or log in."
 }

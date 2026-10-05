@@ -55,32 +55,131 @@ local function nearSmelter(src, smelter, propCoords)
         if not Config.SmeltProps.enabled or type(propCoords) ~= 'vector3' and type(propCoords) ~= 'table' then return false end
         local x, y, z = tonumber(propCoords.x), tonumber(propCoords.y), tonumber(propCoords.z)
         if not (x and y and z) then return false end
-        return #(pos - vector3(x, y, z)) <= Config.MaxUseDistance
+        local reported = vector3(x, y, z)
+        -- If the server lists its prop locations, the reported prop must be one of them
+        local allowed = Config.SmeltProps.locations
+        if allowed and #allowed > 0 then
+            local match = false
+            for _, loc in ipairs(allowed) do
+                if #(reported - loc.xyz) <= (Config.SmeltProps.locationTolerance or 2.0) then match = true break end
+            end
+            if not match then return false end
+        end
+        return #(pos - reported) <= Config.MaxUseDistance
     end
 
     local data = Config.Smelters[smelter]
     return data and #(pos - data.coords.xyz) <= Config.MaxUseDistance or false
 end
 
--- Give back a job's inputs; anything that won't fit is reported in the log
-local function refund(src, job, reason)
+---------------------------------------------------------------------
+-- Persistence (survives restarts and crashes): owed items + live jobs
+---------------------------------------------------------------------
+local KVP_KEY = 'rsg-smelting:state'
+
+local function saveState()
+    local live = {}
+    for _, job in pairs(pending) do
+        live[#live + 1] = { citizenid = job.citizenid, recipeIndex = job.recipeIndex, amount = job.amount, info = job.info }
+    end
+    SetResourceKvp(KVP_KEY, json.encode({ owed = owed, live = live }))
+end
+
+local function addOwed(citizenid, item, amount)
+    if not citizenid then return end
+    owed[citizenid] = owed[citizenid] or {}
+    table.insert(owed[citizenid], { item = item, amount = amount })
+end
+
+local function oweJobInputs(citizenid, job)
     for _, inp in ipairs(job.recipe.inputs) do
-        local total = inp.amount * job.amount
-        if Inventory:AddItem(src, inp.item, total, nil, nil, reason) then
-            itemBox(src, inp.item, 'add', total)
-        else
-            print(('[rsg-smelting] refund failed for %s: %dx %s (inventory full)'):format(src, total, inp.item))
-            Webhook.Send('refund_failed', src, {
-                { locale('wh_f_item'), ('%dx %s'):format(total, itemLabel(inp.item)) },
-                { locale('wh_f_reason'), reason },
-            }, locale('wh_desc_refund_failed'))
+        addOwed(citizenid, inp.item, inp.amount * job.amount)
+    end
+end
+
+-- Load at start: any job still "live" was interrupted by a crash/kill -> owe its inputs
+do
+    local raw = GetResourceKvpString(KVP_KEY)
+    local ok, data = pcall(json.decode, raw or '')
+    if ok and type(data) == 'table' then
+        for cid, items in pairs(data.owed or {}) do
+            for _, it in ipairs(items) do addOwed(cid, it.item, it.amount) end
+        end
+        for _, j in ipairs(data.live or {}) do
+            local recipe = Config.Recipes[j.recipeIndex]
+            if recipe and j.citizenid then
+                oweJobInputs(j.citizenid, { recipe = recipe, amount = j.amount })
+                print(('[rsg-smelting] recovered interrupted smelt for %s (%dx %s)'):format(j.citizenid, j.amount, recipe.output))
+            end
         end
     end
+    saveState()
+end
+
+-- Give back a job's inputs; anything that won't fit is kept as owed for the character
+local function giveOrOwe(src, citizenid, item, total, reason)
+    if Inventory:CanAddItem(src, item, total) and Inventory:AddItem(src, item, total, nil, nil, reason) then
+        itemBox(src, item, 'add', total)
+        return true
+    end
+    addOwed(citizenid, item, total)
+    print(('[rsg-smelting] refund deferred for %s: %dx %s (inventory full)'):format(citizenid or src, total, item))
+    Webhook.Send('refund_failed', src, {
+        { locale('wh_f_item'), ('%dx %s'):format(total, itemLabel(item)) },
+        { locale('wh_f_reason'), reason },
+    }, locale('wh_desc_refund_failed'))
+    return false
+end
+
+local function refund(src, job, reason)
+    local allOk = true
+    for _, inp in ipairs(job.recipe.inputs) do
+        if not giveOrOwe(src, job.citizenid, inp.item, inp.amount * job.amount, reason) then allOk = false end
+    end
+    if not allOk then
+        TriggerClientEvent('ox_lib:notify', src, { title = locale('smelter_title'), description = locale('smelt_refund_deferred'), type = 'inform', duration = 6000 })
+    end
+    saveState()
+end
+
+-- Pay out anything owed to the character currently on this source
+local function payOwed(src)
+    local Player = RSGCore.Functions.GetPlayer(src)
+    if not Player then return end
+    local cid = Player.PlayerData.citizenid
+    local items = owed[cid]
+    if not items or #items == 0 then return end
+    owed[cid] = nil
+    local paid = {}
+    for _, it in ipairs(items) do
+        if Inventory:CanAddItem(src, it.item, it.amount) and Inventory:AddItem(src, it.item, it.amount, nil, nil, 'rsg-smelting:owed') then
+            itemBox(src, it.item, 'add', it.amount)
+            paid[#paid + 1] = ('%dx %s'):format(it.amount, itemLabel(it.item))
+        else
+            addOwed(cid, it.item, it.amount) -- still no room, keep it for next time
+        end
+    end
+    saveState()
+    if #paid > 0 then
+        Webhook.Send('rejoin_refund', src, { { locale('wh_f_refunded'), table.concat(paid, '\n'), inline = false } })
+        TriggerClientEvent('ox_lib:notify', src, { title = locale('smelter_title'), description = locale('smelt_refund_rejoin'), type = 'inform', duration = 5000 })
+    end
+end
+
+-- Move a live job to owed (disconnect / logout / character mismatch)
+local function shelveJob(src, job, event)
+    oweJobInputs(job.citizenid, job)
+    saveState()
+    Webhook.Send(event or 'player_dropped', job.info, {
+        { locale('wh_f_output'), ('%dx %s'):format(job.amount, locale(job.recipe.label)) },
+        { locale('wh_f_held'), Webhook.Inputs(job.recipe, job.amount), inline = false },
+    }, locale('wh_desc_dropped'))
 end
 
 lib.callback.register('rsg-smelting:server:getOreCounts', function(src)
     local Player = RSGCore.Functions.GetPlayer(src)
     if not Player then return {} end
+    payOwed(src) -- opening a smelter retries any deferred refund
     local counts = {}
     for _, item in ipairs(oreList) do
         counts[item] = itemCount(Player, item)
@@ -88,12 +187,30 @@ lib.callback.register('rsg-smelting:server:getOreCounts', function(src)
     return counts
 end)
 
+local STALE_GRACE = 60 -- seconds after a job's end before it counts as abandoned
+
 lib.callback.register('rsg-smelting:server:startSmelt', function(src, smelterIndex, recipeIndex, amount, propCoords)
     local Player = RSGCore.Functions.GetPlayer(src)
     if not Player then return false, locale('err_player') end
-    if pending[src] then return false, locale('err_busy') end
 
-    local recipe = Config.Recipes[tonumber(recipeIndex) or 0]
+    local existing = pending[src]
+    if existing then
+        if existing.citizenid ~= Player.PlayerData.citizenid then
+            -- job of another character on this source: hold it for that character
+            pending[src] = nil
+            shelveJob(src, existing)
+        elseif os.time() - existing.startedAt > existing.duration + STALE_GRACE then
+            -- client never called finishSmelt (crash/stall): refund the abandoned job
+            pending[src] = nil
+            refund(src, existing, 'rsg-smelting:stale')
+            Webhook.Send('smelt_cancel', src, { { locale('wh_f_output'), ('%dx %s'):format(existing.amount, locale(existing.recipe.label)) }, { locale('wh_f_elapsed'), locale('wh_elapsed_val', os.time() - existing.startedAt, existing.duration) } })
+        else
+            return false, locale('err_busy')
+        end
+    end
+
+    recipeIndex = tonumber(recipeIndex) or 0
+    local recipe = Config.Recipes[recipeIndex]
     if not recipe then
         Webhook.Send('suspicious', src, { { locale('wh_f_check'), locale('wh_chk_recipe') }, { locale('wh_f_sent'), tostring(recipeIndex) } })
         return false, locale('err_recipe')
@@ -133,6 +250,7 @@ lib.callback.register('rsg-smelting:server:startSmelt', function(src, smelterInd
 
     pending[src] = {
         recipe = recipe,
+        recipeIndex = recipeIndex,
         amount = amount,
         smelter = smelter,
         propCoords = propCoords,
@@ -141,6 +259,7 @@ lib.callback.register('rsg-smelting:server:startSmelt', function(src, smelterInd
         citizenid = Player.PlayerData.citizenid,
         info = Webhook.PlayerInfo(src), -- snapshot for logs after disconnect
     }
+    saveState()
     Webhook.Send('smelt_start', src, {
         { locale('wh_f_output'), ('%dx %s'):format(amount, locale(recipe.label)) },
         { locale('wh_f_smelter'), Webhook.SmelterName(smelter) },
@@ -153,9 +272,17 @@ end)
 lib.callback.register('rsg-smelting:server:finishSmelt', function(src, cancelled)
     local job = pending[src]
     if not job then return false end
+
+    local Player = RSGCore.Functions.GetPlayer(src)
+    if not Player then return false end
+
     pending[src] = nil
 
-    if not RSGCore.Functions.GetPlayer(src) then return false end
+    -- The job belongs to the character that started it, not to the server id
+    if Player.PlayerData.citizenid ~= job.citizenid then
+        shelveJob(src, job, 'suspicious')
+        return false, locale('smelt_failed')
+    end
 
     if cancelled then
         refund(src, job, 'rsg-smelting:cancel')
@@ -179,6 +306,7 @@ lib.callback.register('rsg-smelting:server:finishSmelt', function(src, cancelled
 
     local output = job.recipe.output
     if Inventory:CanAddItem(src, output, job.amount) and Inventory:AddItem(src, output, job.amount, nil, nil, 'rsg-smelting:finish') then
+        saveState()
         itemBox(src, output, 'add', job.amount)
         Webhook.Send('smelt_complete', src, {
             { locale('wh_f_output'), ('%dx %s'):format(job.amount, locale(job.recipe.label)) },
@@ -199,45 +327,33 @@ AddEventHandler('playerDropped', function()
     local job = pending[src]
     if not job then return end
     pending[src] = nil
-    if job.citizenid then
-        owed[job.citizenid] = owed[job.citizenid] or {}
-        table.insert(owed[job.citizenid], job)
-    end
-    Webhook.Send('player_dropped', job.info, {
-        { locale('wh_f_output'), ('%dx %s'):format(job.amount, locale(job.recipe.label)) },
-        { locale('wh_f_held'), Webhook.Inputs(job.recipe, job.amount), inline = false },
-    }, locale('wh_desc_dropped'))
+    shelveJob(src, job)
 end)
 
+-- Character logout without disconnect: hold the job for that character
+AddEventHandler('RSGCore:Server:OnPlayerUnload', function(src)
+    src = tonumber(src) or source
+    local job = pending[src]
+    if not job then return end
+    pending[src] = nil
+    shelveJob(src, job)
+end)
+
+-- Client-callable, but it only pays what this character is already owed
 RegisterNetEvent('RSGCore:Server:OnPlayerLoaded', function()
     local src = source
-    local Player = RSGCore.Functions.GetPlayer(src)
-    if not Player then return end
-    local jobs = owed[Player.PlayerData.citizenid]
-    if not jobs then return end
-    owed[Player.PlayerData.citizenid] = nil
-    SetTimeout(2000, function()
-        for _, job in ipairs(jobs) do
-            refund(src, job, 'rsg-smelting:rejoin')
-            Webhook.Send('rejoin_refund', src, { { locale('wh_f_refunded'), Webhook.Inputs(job.recipe, job.amount), inline = false } })
-        end
-        TriggerClientEvent('ox_lib:notify', src, { title = locale('smelter_title'), description = locale('smelt_refund_rejoin'), type = 'inform', duration = 5000 })
-    end)
+    SetTimeout(2000, function() payOwed(src) end)
 end)
 
--- Resource stopping mid-smelt: refund everyone still online
+-- Resource stopping mid-smelt: refund everyone still online (anything that
+-- doesn't fit, and owed items, stay persisted for the next start)
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
     for src, job in pairs(pending) do
+        pending[src] = nil
         refund(src, job, 'rsg-smelting:stop')
         Webhook.Send('resource_stop', src, { { locale('wh_f_refunded'), Webhook.Inputs(job.recipe, job.amount), inline = false } })
     end
-    -- unrefunded disconnect jobs are lost on stop: log them so staff can compensate
-    for cid, jobs in pairs(owed) do
-        for _, job in ipairs(jobs) do
-            Webhook.Send('refund_failed', job.info, { { locale('wh_f_citizenid'), cid }, { locale('wh_f_owed'), Webhook.Inputs(job.recipe, job.amount), inline = false } },
-                locale('wh_desc_stop'))
-        end
-    end
+    saveState()
     Webhook.Flush()
 end)

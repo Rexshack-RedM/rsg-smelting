@@ -79,11 +79,12 @@
     "wh_chk_distance": "Not near smelter",
     "wh_chk_too_early": "Finished too early",
     "wh_chk_left_area": "Left smelter area",
-    "wh_desc_refund_failed": "Player inventory was full; these items must be returned manually.",
-    "wh_desc_dropped": "Ores will be refunded when this character next logs in (lost on resource restart).",
+    "wh_desc_refund_failed": "Player inventory was full; the items are saved and will be returned when the character next opens a smelter or logs in.",
+    "wh_desc_dropped": "Ores are saved and will be refunded when this character next logs in or opens a smelter.",
     "wh_desc_stop": "Resource stopped before this player rejoined; refund manually.",
     "wh_player_val": "%s (ID %s)",
     "wh_seconds": "%ss",
     "wh_elapsed_val": "%ss / %ss",
-    "wh_unknown": "Unknown"
+    "wh_unknown": "Unknown",
+    "smelt_refund_deferred": "Your bag was full: the rest will be returned when you next open a smelter or log in."
 }
